@@ -1,21 +1,31 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Mic, Upload, Loader2, Download } from 'lucide-react';
-import { transcribeAudio } from '@/services/huggingface';
+import { Mic, Upload, Loader2, Download, Sparkles } from 'lucide-react';
+import { transcribeAudioLocal, transcribeAudioFileLocal, summarizeTextLocal, checkLocalWhisperHealth } from '@/services/whisper-local';
 import { useToast } from '@/hooks/use-toast';
+import { useUserRole } from '@/hooks/use-user-role';
 
 export default function WhisperTranscription() {
   const [transcription, setTranscription] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [summary, setSummary] = useState('');
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [serverAvailable, setServerAvailable] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const { toast } = useToast();
+  const { isAdmin, loading: roleLoading } = useUserRole();
+
+  // Check server health on mount
+  useEffect(() => {
+    checkLocalWhisperHealth().then(setServerAvailable);
+  }, []);
 
   const startRecording = async () => {
     try {
@@ -68,17 +78,25 @@ export default function WhisperTranscription() {
   const handleTranscribe = async (audio: Blob | File) => {
     setIsTranscribing(true);
     try {
-      const result = await transcribeAudio({ data: audio });
-      setTranscription(result.text);
-      toast({
-        title: 'Transcription complete',
-        description: 'Your audio has been transcribed successfully',
-      });
+      // Use local Whisper server for Hindi2Hinglish transcription
+      const result = audio instanceof File 
+        ? await transcribeAudioFileLocal(audio)
+        : await transcribeAudioLocal(audio);
+      
+      if (result.success && result.text) {
+        setTranscription(result.text);
+        toast({
+          title: 'Transcription complete',
+          description: 'Your audio has been transcribed to Hinglish successfully',
+        });
+      } else {
+        throw new Error(result.error || 'Transcription failed');
+      }
     } catch (error) {
       console.error('Transcription error:', error);
       toast({
         title: 'Transcription failed',
-        description: 'Please check your API key and try again',
+        description: 'Please ensure the local Whisper server is running on port 5001',
         variant: 'destructive',
       });
     } finally {
@@ -98,12 +116,52 @@ export default function WhisperTranscription() {
     URL.revokeObjectURL(url);
   };
 
+  const handleGenerateSummary = async () => {
+    if (!transcription.trim()) {
+      toast({
+        title: 'No transcription',
+        description: 'Please transcribe audio first before generating a summary',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsSummarizing(true);
+    try {
+      // Use local server for summarization
+      const result = await summarizeTextLocal(transcription);
+      if (result.success && result.summary_text) {
+        setSummary(result.summary_text);
+        toast({
+          title: 'Summary generated',
+          description: 'Your transcription has been summarized successfully',
+        });
+      } else {
+        throw new Error(result.error || 'Summarization failed');
+      }
+    } catch (error) {
+      console.error('Summary error:', error);
+      toast({
+        title: 'Summary failed',
+        description: 'Please ensure the local Whisper server is running on port 5001',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Whisper Audio Transcription</CardTitle>
+        <CardTitle>Hindi2Hinglish Audio Transcription</CardTitle>
         <CardDescription>
-          Record or upload audio to transcribe using OpenAI's Whisper model
+          Record or upload Hindi audio to transcribe to Hinglish using Whisper Hindi2Hinglish model
+          {!serverAvailable && (
+            <span className="text-destructive block mt-1">
+              ⚠️ Local server not detected. Please start the Whisper server on port 5001.
+            </span>
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -178,6 +236,39 @@ export default function WhisperTranscription() {
             className="min-h-[200px]"
           />
         </div>
+
+        {transcription && isAdmin && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="summary">Summary (Admin Only)</Label>
+              <Button
+                onClick={handleGenerateSummary}
+                variant="outline"
+                size="sm"
+                disabled={isSummarizing}
+              >
+                {isSummarizing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    Generate Summary
+                  </>
+                )}
+              </Button>
+            </div>
+            <Textarea
+              id="summary"
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+              placeholder="Click 'Generate Summary' to create a summary of the transcription..."
+              className="min-h-[100px] bg-muted/50"
+            />
+          </div>
+        )}
       </CardContent>
     </Card>
   );

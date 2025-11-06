@@ -149,37 +149,28 @@ def quick_categorize(text):
     """Fast keyword-based categorization (fallback when LLM is too slow)"""
     text_lower = text.lower()
     
-    # Category detection
-    category = "General"
-    department = "General Administration"
-    priority = "medium"
+    # Only three departments: road, water, waste
+    department = "road"  # Default
+    severity = "low"  # Default severity
     location = ""
     
-    # Department and category mapping
-    if any(word in text_lower for word in ['water', 'pipe', 'leak', 'supply', 'tap', 'drinking']):
-        category = "Water Supply"
-        department = "Water Department"
-    elif any(word in text_lower for word in ['road', 'pothole', 'street', 'highway', 'pavement']):
-        category = "Road Maintenance"
-        department = "Public Works"
-    elif any(word in text_lower for word in ['electricity', 'power', 'light', 'transformer', 'wire']):
-        category = "Electricity"
-        department = "Electricity Board"
-    elif any(word in text_lower for word in ['garbage', 'waste', 'trash', 'dump', 'sanitation', 'cleanliness']):
-        category = "Sanitation"
-        department = "Sanitation Department"
-    elif any(word in text_lower for word in ['health', 'hospital', 'clinic', 'medical', 'doctor']):
-        category = "Health"
-        department = "Health Department"
-    elif any(word in text_lower for word in ['drainage', 'sewer', 'gutter', 'overflow']):
-        category = "Drainage"
-        department = "Public Works"
+    # Department detection (only road, water, waste)
+    if any(word in text_lower for word in ['water', 'pipe', 'leak', 'supply', 'tap', 'drinking', 'paani', 'jal']):
+        department = "water"
+    elif any(word in text_lower for word in ['garbage', 'waste', 'trash', 'dump', 'sanitation', 'cleanliness', 'kachra', 'safai']):
+        department = "waste"
+    elif any(word in text_lower for word in ['road', 'pothole', 'street', 'highway', 'pavement', 'sadak', 'rasta']):
+        department = "road"
     
-    # Priority detection
-    if any(word in text_lower for word in ['urgent', 'emergency', 'critical', 'immediate', 'danger', 'serious']):
-        priority = "high"
-    elif any(word in text_lower for word in ['minor', 'small', 'slight']):
-        priority = "low"
+    # Severity detection (low, medium, high, critical)
+    if any(word in text_lower for word in ['critical', 'emergency', 'immediate', 'danger', 'life-threatening', 'severe']):
+        severity = "critical"
+    elif any(word in text_lower for word in ['urgent', 'serious', 'important', 'high']):
+        severity = "high"
+    elif any(word in text_lower for word in ['moderate', 'medium', 'normal']):
+        severity = "medium"
+    elif any(word in text_lower for word in ['minor', 'small', 'slight', 'low']):
+        severity = "low"
     
     # Try to extract location (simple approach)
     import re
@@ -193,10 +184,16 @@ def quick_categorize(text):
             location = match.group(1).strip()
             break
     
-    analysis = f"""Category: {category}
-Priority: {priority}
-Department: {department}
-Location: {location if location else 'Not specified'}"""
+    # Generate a concise summary (first sentence or up to 100 chars)
+    sentences = text.split('.')
+    summary = sentences[0].strip() if sentences else text[:100]
+    if len(text) > 100 and len(summary) < 100:
+        summary = text[:100].strip() + "..."
+    
+    analysis = f"""Department: {department}
+Severity: {severity}
+Location: {location if location else ''}
+Summary: {summary}"""
     
     return analysis
 

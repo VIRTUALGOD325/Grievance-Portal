@@ -6,7 +6,7 @@ Runs the Oriserve/Whisper-Hindi2Hinglish-Swift model locally
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline, AutoModelForSeq2SeqLM, AutoTokenizer
 import torch
 import os
 from dotenv import load_dotenv
@@ -39,6 +39,8 @@ torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 model = None
 processor = None
 pipe = None
+summarizer = None
+translator = None
 
 def load_model():
     """Load the Whisper model and processor"""
@@ -86,6 +88,7 @@ def load_model():
             return_timestamps=False,
             torch_dtype=torch_dtype,
             device=device,
+            generate_kwargs={"language": "english", "task": "transcribe"}  # Force English output
         )
         
         logger.info("Model loaded successfully!")
@@ -93,6 +96,64 @@ def load_model():
     except Exception as e:
         logger.error(f"Error loading model: {str(e)}")
         return False
+
+def load_summarizer():
+    """Load the summarization model (optional, loaded on first use)"""
+    global summarizer
+    
+    if summarizer is not None:
+        return True
+    
+    try:
+        logger.info("Loading summarization model...")
+        summarizer = pipeline(
+            "summarization",
+            model="facebook/bart-large-cnn",
+            device=device,
+            torch_dtype=torch_dtype,
+            cache_dir=CACHE_DIR
+        )
+        logger.info("Summarization model loaded successfully!")
+        return True
+    except Exception as e:
+        logger.error(f"Error loading summarization model: {str(e)}")
+        return False
+
+def load_translator():
+    """Load the translation model (optional, loaded on first use)"""
+    global translator
+    
+    if translator is not None:
+        return True
+    
+    try:
+        logger.info("Loading translation model (facebook/mbart-large-50-many-to-many-mmt)...")
+        # Use a more robust translation model
+        translator = pipeline(
+            "translation_hi_to_en",
+            model="facebook/mbart-large-50-many-to-many-mmt",
+            device=device,
+            src_lang="hi_IN",
+            tgt_lang="en_XX",
+            cache_dir=CACHE_DIR
+        )
+        logger.info("Translation model loaded successfully!")
+        return True
+    except Exception as e:
+        logger.error(f"Error loading translation model: {str(e)}")
+        # Fallback: try simpler model
+        try:
+            logger.info("Trying alternative translation model (Helsinki-NLP/opus-mt-hi-en)...")
+            from transformers import MarianMTModel, MarianTokenizer
+            model_name = "Helsinki-NLP/opus-mt-hi-en"
+            tokenizer = MarianTokenizer.from_pretrained(model_name, cache_dir=CACHE_DIR)
+            model = MarianMTModel.from_pretrained(model_name, cache_dir=CACHE_DIR)
+            translator = pipeline("translation", model=model, tokenizer=tokenizer, device=device)
+            logger.info("Alternative translation model loaded successfully!")
+            return True
+        except Exception as e2:
+            logger.error(f"Error loading alternative translation model: {str(e2)}")
+            return False
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -181,6 +242,91 @@ def transcribe_base64():
         
     except Exception as e:
         logger.error(f"Transcription error: {str(e)}")
+        return jsonify({
+            'error': str(e),
+            'success': False
+        }), 500
+
+@app.route('/summarize', methods=['POST'])
+def summarize():
+    """Summarize text using local model"""
+    try:
+        # Load summarizer on first use
+        if not load_summarizer():
+            return jsonify({'error': 'Failed to load summarization model'}), 500
+        
+        data = request.get_json()
+        
+        if 'text' not in data:
+            return jsonify({'error': 'No text provided'}), 400
+        
+        text = data['text']
+        max_length = data.get('max_length', 130)
+        min_length = data.get('min_length', 30)
+        
+        logger.info(f"Summarizing text (length: {len(text)} chars)")
+        
+        # Summarize
+        result = summarizer(
+            text,
+            max_length=max_length,
+            min_length=min_length,
+            do_sample=False
+        )
+        
+        logger.info("Summarization completed successfully")
+        
+        return jsonify({
+            'summary_text': result[0]['summary_text'],
+            'success': True
+        })
+        
+    except Exception as e:
+        logger.error(f"Summarization error: {str(e)}")
+        return jsonify({
+            'error': str(e),
+            'success': False
+        }), 500
+
+@app.route('/translate', methods=['POST'])
+def translate():
+    """Translate Hinglish/Hindi text to English using Google Translate API"""
+    try:
+        data = request.get_json()
+        
+        if 'text' not in data:
+            return jsonify({'error': 'No text provided'}), 400
+        
+        text = data['text']
+        
+        logger.info(f"Translating text: {text[:50]}...")
+        
+        # Use googletrans library for simple translation
+        try:
+            from googletrans import Translator
+            translator_obj = Translator()
+            result = translator_obj.translate(text, src='hi', dest='en')
+            translated_text = result.text
+            
+            logger.info(f"Translation completed: {translated_text[:50]}...")
+            
+            return jsonify({
+                'translated_text': translated_text,
+                'original_text': text,
+                'success': True
+            })
+        except ImportError:
+            # Fallback: return original text if googletrans not available
+            logger.warning("googletrans not installed, returning original text")
+            return jsonify({
+                'translated_text': text,
+                'original_text': text,
+                'success': True,
+                'note': 'Translation skipped - googletrans not installed'
+            })
+        
+    except Exception as e:
+        logger.error(f"Translation error: {str(e)}")
         return jsonify({
             'error': str(e),
             'success': False

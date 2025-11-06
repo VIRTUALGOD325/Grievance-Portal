@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { Mic, Loader2, Upload, Sparkles } from "lucide-react";
 import { transcribeAudio, categorizeGrievance } from "@/services/huggingface";
-import { transcribeAudioLocal, checkLocalWhisperHealth } from "@/services/whisper-local";
+import { transcribeAudioLocal, checkLocalWhisperHealth, translateToEnglishLocal } from "@/services/whisper-local";
 import { categorizeGrievanceLocal, checkLocalGrievanceHealth } from "@/services/grievance-local";
 
 interface ComplaintFormProps {
@@ -28,9 +28,10 @@ interface Department {
 
 const complaintSchema = z.object({
   description: z.string().trim().min(10, "Description must be at least 10 characters").max(1000),
-  location: z.string().trim().min(3, "Location must be at least 3 characters").max(150),
+  location: z.string().trim().max(150).optional(),
   severity: z.enum(["low", "medium", "high", "critical"]),
   department_id: z.string().uuid("Please select a department"),
+  summary: z.string().trim().max(200).optional(),
 });
 
 const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
@@ -40,15 +41,18 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
   const [formData, setFormData] = useState({
     description: "",
     location: "",
-    severity: "medium",
+    severity: "low",
     department_id: "",
+    summary: "",
   });
   
   // Audio recording states
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [useAIAutofill, setUseAIAutofill] = useState(true);
+  const [useLLMMode, setUseLLMMode] = useState(false);
   const [isProcessingAI, setIsProcessingAI] = useState(false);
+  const [transcription, setTranscription] = useState('');
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -82,13 +86,13 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Generate summary from description (first 100 chars)
-      const summary = validated.description.substring(0, 100) + (validated.description.length > 100 ? "..." : "");
+      // Use provided summary or generate from description (first 100 chars)
+      const summary = validated.summary || validated.description.substring(0, 100) + (validated.description.length > 100 ? "..." : "");
 
       const { error } = await supabase.from("complaints").insert({
         citizen_id: user.id,
         description: validated.description,
-        location: validated.location,
+        location: validated.location || "",
         severity: validated.severity,
         department_id: validated.department_id,
         summary,
@@ -188,17 +192,32 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
       
       const transcribedText = result.text;
       
-      // Set description first
-      setFormData(prev => ({ ...prev, description: transcribedText }));
+      // Set transcription field with Hinglish text
+      setTranscription(transcribedText);
+      
+      // Translate Hinglish to English
+      console.log('Translating Hinglish to English...');
+      const translationResult = await translateToEnglishLocal(transcribedText);
+      
+      let finalText = transcribedText;
+      if (translationResult.success && translationResult.translated_text) {
+        finalText = translationResult.translated_text;
+        console.log('Translation successful:', finalText);
+      } else {
+        console.warn('Translation failed, using Hinglish text');
+      }
+      
+      // Set description with English translation
+      setFormData(prev => ({ ...prev, description: finalText }));
       
       toast({
         title: 'Transcription complete',
-        description: 'Audio transcribed using local Hindi2Hinglish model',
+        description: 'Audio transcribed and translated to English',
       });
       
       // If AI autofill is enabled, process with LLM
       if (useAIAutofill) {
-        await processWithAI(transcribedText);
+        await processWithAI(finalText);
       }
     } catch (error) {
       console.error('Transcription error:', error);
@@ -233,7 +252,7 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
       }
 
       // Use local fine-tuned grievance model to categorize (using Mistral)
-      const aiResponse = await categorizeGrievanceLocal(grievanceText, 'mistral');
+      const aiResponse = await categorizeGrievanceLocal(grievanceText, 'mistral', !useLLMMode);
       
       if (!aiResponse.success) {
         throw new Error(aiResponse.error || 'AI processing failed');
@@ -253,6 +272,7 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
         severity: parsedData.severity || prev.severity,
         location: parsedData.location || prev.location,
         department_id: parsedData.department_id || prev.department_id,
+        summary: parsedData.summary || prev.summary,
       }));
       
       toast({
@@ -276,6 +296,7 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
       severity?: string;
       location?: string;
       department_id?: string;
+      summary?: string;
     } = {};
     
     const lowerText = aiText.toLowerCase();
@@ -292,27 +313,31 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
     }
     
     // Extract location from AI response
-    const locationMatch = aiText.match(/location[:\s]+([^\n,]+)/i);
+    const locationMatch = aiText.match(/location[:\s]+([^\n]+)/i);
     if (locationMatch) {
-      parsed.location = locationMatch[1].trim();
+      const loc = locationMatch[1].trim();
+      // Only set location if it's not empty or "not specified"
+      if (loc && !loc.toLowerCase().includes('not specified') && !loc.toLowerCase().includes('none')) {
+        parsed.location = loc;
+      }
     }
     
-    // Map department based on keywords
-    if (lowerText.includes('water') || lowerText.includes('paani')) {
+    // Extract summary from AI response
+    const summaryMatch = aiText.match(/summary[:\s]+([^\n]+)/i);
+    if (summaryMatch) {
+      parsed.summary = summaryMatch[1].trim();
+    }
+    
+    // Map department based on keywords (only road, water, waste)
+    if (lowerText.includes('water') || lowerText.includes('paani') || lowerText.includes('jal')) {
       const waterDept = departments.find(d => d.name.toLowerCase().includes('water'));
       if (waterDept) parsed.department_id = waterDept.id;
-    } else if (lowerText.includes('road') || lowerText.includes('sadak') || lowerText.includes('street')) {
-      const roadDept = departments.find(d => d.name.toLowerCase().includes('road') || d.name.toLowerCase().includes('public_works'));
+    } else if (lowerText.includes('waste') || lowerText.includes('garbage') || lowerText.includes('kachra') || lowerText.includes('sanitation') || lowerText.includes('trash')) {
+      const wasteDept = departments.find(d => d.name.toLowerCase().includes('waste') || d.name.toLowerCase().includes('sanitation'));
+      if (wasteDept) parsed.department_id = wasteDept.id;
+    } else if (lowerText.includes('road') || lowerText.includes('sadak') || lowerText.includes('street') || lowerText.includes('pothole')) {
+      const roadDept = departments.find(d => d.name.toLowerCase().includes('road'));
       if (roadDept) parsed.department_id = roadDept.id;
-    } else if (lowerText.includes('electricity') || lowerText.includes('bijli') || lowerText.includes('power')) {
-      const powerDept = departments.find(d => d.name.toLowerCase().includes('electricity') || d.name.toLowerCase().includes('power'));
-      if (powerDept) parsed.department_id = powerDept.id;
-    } else if (lowerText.includes('garbage') || lowerText.includes('kachra') || lowerText.includes('waste')) {
-      const sanitationDept = departments.find(d => d.name.toLowerCase().includes('sanitation') || d.name.toLowerCase().includes('waste'));
-      if (sanitationDept) parsed.department_id = sanitationDept.id;
-    } else if (lowerText.includes('health') || lowerText.includes('hospital') || lowerText.includes('medical')) {
-      const healthDept = departments.find(d => d.name.toLowerCase().includes('health'));
-      if (healthDept) parsed.department_id = healthDept.id;
     }
     
     return parsed;
@@ -372,13 +397,12 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="location">Location *</Label>
+            <Label htmlFor="location">Location (Optional)</Label>
             <Input
               id="location"
-              placeholder="e.g., Street name, landmark, area"
+              placeholder="e.g., Street name, landmark, area (leave empty if not applicable)"
               value={formData.location}
               onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-              required
             />
           </div>
 
@@ -396,19 +420,53 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
             <p className="text-xs text-muted-foreground">
               Minimum 10 characters. Be specific about the problem.
             </p>
-            
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="summary">Summary (Optional)</Label>
+            <Input
+              id="summary"
+              placeholder="Brief summary of the issue (auto-generated by AI if empty)"
+              value={formData.summary}
+              onChange={(e) => setFormData({ ...formData, summary: e.target.value })}
+              maxLength={200}
+            />
+            <p className="text-xs text-muted-foreground">
+              A concise summary will be auto-generated if left empty.
+            </p>
+          </div>
+
+          <div className="space-y-2">
             {/* AI Auto-fill Toggle */}
-            <div className="flex items-center justify-between pt-2 pb-2 px-3 bg-muted/50 rounded-lg">
-              <Label htmlFor="ai-autofill" className="text-sm font-medium cursor-pointer flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-primary" />
-                AI Auto-fill Form Fields
-                <span className="text-xs text-muted-foreground font-normal">(uses fine-tuned grievance models)</span>
-              </Label>
-              <Switch
-                id="ai-autofill"
-                checked={useAIAutofill}
-                onCheckedChange={setUseAIAutofill}
-              />
+            <div className="space-y-2">
+              <div className="flex items-center justify-between pt-2 pb-2 px-3 bg-muted/50 rounded-lg">
+                <Label htmlFor="ai-autofill" className="text-sm font-medium cursor-pointer flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  AI Auto-fill Form Fields
+                  <span className="text-xs text-muted-foreground font-normal">(uses fine-tuned grievance models)</span>
+                </Label>
+                <Switch
+                  id="ai-autofill"
+                  checked={useAIAutofill}
+                  onCheckedChange={setUseAIAutofill}
+                />
+              </div>
+              
+              {/* LLM Mode Toggle */}
+              {useAIAutofill && (
+                <div className="flex items-center justify-between pt-2 pb-2 px-3 bg-primary/5 rounded-lg border border-primary/20">
+                  <Label htmlFor="llm-mode" className="text-sm font-medium cursor-pointer flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    Use Full LLM Mode
+                    <span className="text-xs text-muted-foreground font-normal">(slower but more accurate)</span>
+                  </Label>
+                  <Switch
+                    id="llm-mode"
+                    checked={useLLMMode}
+                    onCheckedChange={setUseLLMMode}
+                  />
+                </div>
+              )}
             </div>
             
             {/* Audio Recording Options */}
@@ -466,10 +524,25 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
                 </div>
               )}
             </div>
+            
+            {/* Transcription Field */}
+            <div className="space-y-2">
+              <Label htmlFor="transcription">Transcription</Label>
+              <Textarea
+                id="transcription"
+                placeholder="Transcribed text will appear here..."
+                value={transcription}
+                onChange={(e) => setTranscription(e.target.value)}
+                rows={3}
+                className="resize-none"
+              />
+            </div>
+            
             <p className="text-xs text-muted-foreground italic">
               💡 Tip: Use voice recording to describe your complaint in Hindi - it will be automatically transcribed and analyzed by AI
             </p>
           </div>
+
 
           <div className="flex gap-3 justify-end pt-4">
             <Button type="button" variant="outline" onClick={onClose} disabled={loading}>

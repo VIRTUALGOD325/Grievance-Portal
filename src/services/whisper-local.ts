@@ -54,6 +54,45 @@ export async function transcribeAudioLocal(audioBlob: Blob): Promise<LocalTransc
   }
 }
 
+export interface LocalSummaryResult {
+  summary_text: string;
+  success: boolean;
+  error?: string;
+}
+
+/**
+ * Summarize text using local server
+ */
+export async function summarizeTextLocal(text: string, maxLength?: number): Promise<LocalSummaryResult> {
+  try {
+    const response = await fetch(`${LOCAL_WHISPER_URL}/summarize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        text,
+        max_length: maxLength || 130,
+        min_length: 30,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`);
+    }
+
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error('Local summarization error:', error);
+    return {
+      summary_text: '',
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
 /**
  * Transcribe audio file using local Whisper server
  */
@@ -130,4 +169,41 @@ function blobToBase64(blob: Blob): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+export interface TranslationResult {
+  translated_text: string;
+  original_text: string;
+  success: boolean;
+  error?: string;
+}
+
+/**
+ * Translate Hinglish/Hindi text to English using local server
+ */
+export async function translateToEnglishLocal(text: string): Promise<TranslationResult> {
+  try {
+    const response = await fetch(`${LOCAL_WHISPER_URL}/translate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`);
+    }
+
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error('Translation error:', error);
+    return {
+      translated_text: '',
+      original_text: text,
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
 }
