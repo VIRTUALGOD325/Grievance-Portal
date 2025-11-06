@@ -8,6 +8,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Shield, LogOut, BarChart3, CheckCircle, Clock, AlertTriangle } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
+import type { Database } from "@/integrations/supabase/types";
+
+type ComplaintStatus = Database['public']['Enums']['complaint_status'];
+type SeverityLevel = Database['public']['Enums']['severity_level'];
 
 interface Complaint {
   id: string;
@@ -35,8 +39,8 @@ const AdminDashboard = () => {
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [stats, setStats] = useState<Stats>({ total: 0, pending: 0, in_progress: 0, resolved: 0 });
   const [loading, setLoading] = useState(true);
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [filterSeverity, setFilterSeverity] = useState("all");
+  const [filterStatus, setFilterStatus] = useState<ComplaintStatus | "all">("all");
+  const [filterSeverity, setFilterSeverity] = useState<SeverityLevel | "all">("all");
 
   useEffect(() => {
     const initializeData = async () => {
@@ -100,10 +104,10 @@ const AdminDashboard = () => {
         .order("created_at", { ascending: false });
 
       if (filterStatus !== "all") {
-        query = query.eq("status", filterStatus);
+        query = query.eq("status", filterStatus as ComplaintStatus);
       }
       if (filterSeverity !== "all") {
-        query = query.eq("severity", filterSeverity);
+        query = query.eq("severity", filterSeverity as SeverityLevel);
       }
 
       const { data, error } = await query;
@@ -170,7 +174,7 @@ const AdminDashboard = () => {
     navigate("/");
   };
 
-  const handleStatusUpdate = async (complaintId: string, newStatus: string) => {
+  const handleStatusUpdate = async (complaintId: string, newStatus: ComplaintStatus) => {
     try {
       const { error } = await supabase
         .from("complaints")
@@ -184,8 +188,8 @@ const AdminDashboard = () => {
       if (oldComplaint && user) {
         await supabase.from("status_history").insert([{
           complaint_id: complaintId,
-          old_status: oldComplaint.status,
-          new_status: newStatus as any,
+          old_status: oldComplaint.status as ComplaintStatus,
+          new_status: newStatus,
           changed_by: user.id,
         }]);
       }
@@ -299,7 +303,7 @@ const AdminDashboard = () => {
           <CardContent>
             <div className="flex gap-4 flex-wrap">
               <div className="flex-1 min-w-[200px]">
-                <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <Select value={filterStatus} onValueChange={(value) => setFilterStatus(value as ComplaintStatus | "all")}>
                   <SelectTrigger>
                     <SelectValue placeholder="Filter by status" />
                   </SelectTrigger>
@@ -315,7 +319,7 @@ const AdminDashboard = () => {
               </div>
 
               <div className="flex-1 min-w-[200px]">
-                <Select value={filterSeverity} onValueChange={setFilterSeverity}>
+                <Select value={filterSeverity} onValueChange={(value) => setFilterSeverity(value as SeverityLevel | "all")}>
                   <SelectTrigger>
                     <SelectValue placeholder="Filter by severity" />
                   </SelectTrigger>
@@ -369,7 +373,7 @@ const AdminDashboard = () => {
                       <div className="min-w-[180px]">
                         <Select
                           value={complaint.status}
-                          onValueChange={(value) => handleStatusUpdate(complaint.id, value)}
+                          onValueChange={(value) => handleStatusUpdate(complaint.id, value as ComplaintStatus)}
                         >
                           <SelectTrigger>
                             <SelectValue />
