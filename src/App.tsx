@@ -8,6 +8,7 @@ import CitizenAuth from "./pages/auth/CitizenAuth";
 import AdminAuth from "./pages/auth/AdminAuth";
 import CitizenDashboard from "./pages/CitizenDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
+import AIFeatures from "./pages/AIFeatures";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -24,6 +25,7 @@ const App = () => (
           <Route path="/admin/auth" element={<AdminAuth />} />
           <Route path="/dashboard" element={<CitizenDashboard />} />
           <Route path="/admin/dashboard" element={<AdminDashboard />} />
+          <Route path="/ai-features" element={<AIFeatures />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>

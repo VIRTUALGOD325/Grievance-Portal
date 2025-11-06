@@ -1,0 +1,23 @@
+{
+  "name": "whisper-ai-project",
+  "version": "1.0.0",
+  "description": "A project that integrates Hugging Face AI with Whisper models for audio transcription.",
+  "main": "src/app.ts",
+  "scripts": {
+    "start": "ts-node src/app.ts",
+    "test": "jest"
+  },
+  "dependencies": {
+    "axios": "^0.21.1",
+    "dotenv": "^10.0.0",
+    "ts-node": "^10.0.0",
+    "typescript": "^4.3.5"
+  },
+  "devDependencies": {
+    "jest": "^27.0.0",
+    "ts-jest": "^27.0.0",
+    "@types/jest": "^27.0.0"
+  },
+  "author": "Your Name",
+  "license": "MIT"
+}

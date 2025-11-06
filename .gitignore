@@ -22,3 +22,75 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# Local servers
+whisper-local-server/venv/
+grievance-local-server/venv/
+whisper-local-server/__pycache__/
+grievance-local-server/__pycache__/
+
+# Environment variables
+.env.local
+.env.*.local
+
+# Hugging Face cache (optional - comment out if you want to keep cache in repo)
+# .cache/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Audio files (if you don't want to commit test audio)
+*.wav
+*.mp3
+*.webm
+*.ogg
+*.m4a
+
+# Model files (too large for git)
+*.bin
+*.safetensors
+*.gguf
+*.pt
+*.pth
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
