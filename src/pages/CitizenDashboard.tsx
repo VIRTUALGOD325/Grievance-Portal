@@ -16,6 +16,7 @@ interface Complaint {
   severity: string;
   status: string;
   location: string;
+  transcription_text: string | null;
   created_at: string;
   departments: { name: string } | null;
 }
@@ -66,6 +67,7 @@ const CitizenDashboard = () => {
           severity,
           status,
           location,
+          transcription_text,
           created_at,
           departments (name)
         `)
@@ -206,16 +208,24 @@ const CitizenDashboard = () => {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <p className="text-sm text-muted-foreground mb-2">
+                    <p className="text-sm text-muted-foreground mt-3">
                       {complaint.description}
                     </p>
-                    {complaint.location && (
-                      <p className="text-sm text-muted-foreground">
-                        📍 {complaint.location}
-                      </p>
+                    {complaint.transcription_text && (
+                      <div className="mt-3 p-2 bg-muted/50 rounded-md border border-muted">
+                        <p className="text-xs font-medium text-muted-foreground mb-1">
+                          🎤 Original Transcription:
+                        </p>
+                        <p className="text-xs text-muted-foreground italic">
+                          "{complaint.transcription_text}"
+                        </p>
+                      </div>
                     )}
-                    <p className="text-xs text-muted-foreground mt-3">
-                      Filed on {new Date(complaint.created_at).toLocaleDateString()}
+                    <p className="text-xs text-muted-foreground mt-2">
+                      📍 {complaint.location || "Location not specified"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      📅 {new Date(complaint.created_at).toLocaleDateString()}
                     </p>
                   </CardContent>
                 </Card>

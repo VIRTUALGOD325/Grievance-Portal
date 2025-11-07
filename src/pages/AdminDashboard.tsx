@@ -17,10 +17,12 @@ interface Complaint {
   id: string;
   description: string;
   summary: string;
-  severity: string;
-  status: string;
+  severity: SeverityLevel;
+  status: ComplaintStatus;
   location: string;
+  transcription_text: string | null;
   created_at: string;
+  citizen_id: string;
   departments: { name: string } | null;
   profiles: { full_name: string; email: string } | null;
 }
@@ -97,6 +99,7 @@ const AdminDashboard = () => {
           severity,
           status,
           location,
+          transcription_text,
           created_at,
           citizen_id,
           departments (name)
@@ -239,6 +242,14 @@ const AdminDashboard = () => {
               <h1 className="text-xl font-bold">Admin Dashboard</h1>
             </div>
             <div className="flex items-center gap-3">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => navigate("/admin/database")}
+              >
+                <Shield className="h-4 w-4 mr-2" />
+                Database
+              </Button>
               <span className="text-sm text-muted-foreground hidden sm:inline">
                 {user?.email}
               </span>
@@ -390,17 +401,24 @@ const AdminDashboard = () => {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <p className="text-sm text-muted-foreground mb-2">
+                    <p className="text-sm text-muted-foreground mb-3">
                       {complaint.description}
                     </p>
-                    {complaint.location && (
-                      <p className="text-sm text-muted-foreground">
-                        📍 {complaint.location}
-                      </p>
+                    {complaint.transcription_text && (
+                      <div className="mb-3 p-2 bg-muted/50 rounded-md border border-muted">
+                        <p className="text-xs font-medium text-muted-foreground mb-1">
+                          🎤 Original Transcription:
+                        </p>
+                        <p className="text-xs text-muted-foreground italic">
+                          "{complaint.transcription_text}"
+                        </p>
+                      </div>
                     )}
-                    <p className="text-xs text-muted-foreground mt-3">
-                      Filed on {new Date(complaint.created_at).toLocaleDateString()}
-                    </p>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span>📍 {complaint.location || "Not specified"}</span>
+                      <span>•</span>
+                      <span>📅 {new Date(complaint.created_at).toLocaleDateString()}</span>
+                    </div>
                   </CardContent>
                 </Card>
               ))}

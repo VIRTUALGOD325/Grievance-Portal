@@ -13,6 +13,7 @@ import { Mic, Loader2, Upload, Sparkles } from "lucide-react";
 import { transcribeAudio, categorizeGrievance } from "@/services/huggingface";
 import { transcribeAudioLocal, checkLocalWhisperHealth, translateToEnglishLocal } from "@/services/whisper-local";
 import { categorizeGrievanceLocal, checkLocalGrievanceHealth } from "@/services/grievance-local";
+import { callFineTunedLLM, getAvailableModels, type LLMModel } from "@/services/llm-models";
 
 interface ComplaintFormProps {
   open: boolean;
@@ -27,7 +28,7 @@ interface Department {
 }
 
 const complaintSchema = z.object({
-  description: z.string().trim().min(10, "Description must be at least 10 characters").max(1000),
+  description: z.string().trim().min(1, "Description is required").max(1000),
   location: z.string().trim().max(150).optional(),
   severity: z.enum(["low", "medium", "high", "critical"]),
   department_id: z.string().uuid("Please select a department"),
@@ -44,6 +45,7 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
     severity: "low",
     department_id: "",
     summary: "",
+    llm_model_used: "",
   });
   
   // Audio recording states
@@ -51,6 +53,7 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [useAIAutofill, setUseAIAutofill] = useState(true);
   const [useLLMMode, setUseLLMMode] = useState(false);
+  const [selectedLLMModel, setSelectedLLMModel] = useState<LLMModel>('llama');
   const [isProcessingAI, setIsProcessingAI] = useState(false);
   const [transcription, setTranscription] = useState('');
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -96,6 +99,7 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
         severity: validated.severity,
         department_id: validated.department_id,
         summary,
+        transcription_text: transcription || null,
         status: "pending",
       });
 
@@ -207,7 +211,7 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
         console.warn('Translation failed, using Hinglish text');
       }
       
-      // Set description with English translation
+      // Set description with English translation (fallback if LLM fails)
       setFormData(prev => ({ ...prev, description: finalText }));
       
       toast({
@@ -215,9 +219,12 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
         description: 'Audio transcribed and translated to English',
       });
       
-      // If AI autofill is enabled, process with LLM
+      // Always process with LLM to get cleaned description
       if (useAIAutofill) {
         await processWithAI(finalText);
+      } else {
+        // If AI is disabled, still use the translated text as description
+        console.log('AI autofill disabled, using translated text as description');
       }
     } catch (error) {
       console.error('Transcription error:', error);
@@ -236,48 +243,41 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
     try {
       toast({
         title: 'AI Processing',
-        description: 'Analyzing grievance to auto-fill form fields...',
+        description: `Analyzing with ${selectedLLMModel.toUpperCase()} model...`,
       });
 
-      // Check if local grievance server is available
-      const isLocalAvailable = await checkLocalGrievanceHealth();
+      // Use fine-tuned LLM model with instruction.txt
+      const llmOutput = await callFineTunedLLM(grievanceText, selectedLLMModel);
       
-      if (!isLocalAvailable) {
-        toast({
-          title: 'Local Grievance Server Required',
-          description: 'Please start the local grievance server. Run: cd grievance-local-server && ./start.sh (or start.bat on Windows). Server runs on port 5002.',
-          variant: 'destructive',
-        });
-        return;
-      }
-
-      // Use local fine-tuned grievance model to categorize (using Mistral)
-      const aiResponse = await categorizeGrievanceLocal(grievanceText, 'mistral', !useLLMMode);
+      console.log(`LLM Output from ${selectedLLMModel.toUpperCase()} model:`, llmOutput);
       
-      if (!aiResponse.success) {
-        throw new Error(aiResponse.error || 'AI processing failed');
-      }
+      // Map department name to department ID
+      const deptMapping: Record<string, string> = {
+        'roads_and_traffic': 'roads',
+        'water_supply': 'water',
+        'solid_waste_management': 'waste',
+      };
       
-      const analysis = aiResponse.generated_text;
+      const deptKeyword = deptMapping[llmOutput.department] || llmOutput.department;
+      const matchedDept = departments.find(d => 
+        d.name.toLowerCase().includes(deptKeyword) ||
+        d.name.toLowerCase().includes(llmOutput.department.replace(/_/g, ' '))
+      );
       
-      console.log('AI Analysis:', analysis);
-      
-      // Parse AI response to extract information
-      const parsedData = parseAIResponse(analysis);
-      
-      // Auto-fill form fields
+      // Auto-fill form fields with LLM output
       setFormData(prev => ({
         ...prev,
-        description: grievanceText,
-        severity: parsedData.severity || prev.severity,
-        location: parsedData.location || prev.location,
-        department_id: parsedData.department_id || prev.department_id,
-        summary: parsedData.summary || prev.summary,
+        description: llmOutput.description,
+        severity: llmOutput.severity,
+        location: llmOutput.location || prev.location,
+        department_id: matchedDept?.id || prev.department_id,
+        summary: llmOutput.summary,
+        llm_model_used: selectedLLMModel,
       }));
       
       toast({
         title: 'AI Auto-fill Complete',
-        description: 'Form fields have been automatically filled based on your grievance',
+        description: `Processed with ${selectedLLMModel.toUpperCase()} model. Form fields auto-filled.`,
       });
     } catch (error) {
       console.error('AI processing error:', error);
@@ -452,19 +452,28 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
                 />
               </div>
               
-              {/* LLM Mode Toggle */}
+              {/* LLM Model Selection */}
               {useAIAutofill && (
-                <div className="flex items-center justify-between pt-2 pb-2 px-3 bg-primary/5 rounded-lg border border-primary/20">
-                  <Label htmlFor="llm-mode" className="text-sm font-medium cursor-pointer flex items-center gap-2">
+                <div className="space-y-3 pt-2 pb-2 px-3 bg-primary/5 rounded-lg border border-primary/20">
+                  <div className="flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-primary" />
-                    Use Full LLM Mode
-                    <span className="text-xs text-muted-foreground font-normal">(slower but more accurate)</span>
-                  </Label>
-                  <Switch
-                    id="llm-mode"
-                    checked={useLLMMode}
-                    onCheckedChange={setUseLLMMode}
-                  />
+                    <Label className="text-sm font-medium">Fine-tuned LLM Model</Label>
+                  </div>
+                  <Select value={selectedLLMModel} onValueChange={(value) => setSelectedLLMModel(value as LLMModel)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select LLM model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {getAvailableModels().map((model) => (
+                        <SelectItem key={model.value} value={model.value}>
+                          {model.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Choose the AI model for analyzing your grievance
+                  </p>
                 </div>
               )}
             </div>
@@ -509,13 +518,78 @@ const ComplaintForm = ({ open, onClose, onSuccess }: ComplaintFormProps) => {
                 onChange={handleFileUpload}
                 className="hidden"
               />
-              
-              {isTranscribing && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Transcribing...
-                </div>
-              )}
+            </div>
+            
+            {/* Manual Transcript Input */}
+            <div className="space-y-2 pt-4 border-t">
+              <Label htmlFor="manual-transcript">Or Type Transcript Manually</Label>
+              <div className="flex gap-2">
+                <Textarea
+                  id="manual-transcript"
+                  placeholder="Type or paste your complaint in Hinglish or English..."
+                  value={transcription}
+                  onChange={(e) => setTranscription(e.target.value)}
+                  className="min-h-[80px]"
+                  disabled={isProcessingAI || loading}
+                />
+              </div>
+              <Button
+                type="button"
+                onClick={async () => {
+                  if (!transcription.trim()) {
+                    toast({
+                      title: 'No transcript',
+                      description: 'Please type a complaint first',
+                      variant: 'destructive',
+                    });
+                    return;
+                  }
+                  
+                  setIsProcessingAI(true);
+                  try {
+                    // Translate Hinglish to English if needed
+                    const translationResult = await translateToEnglishLocal(transcription);
+                    
+                    let finalText = transcription;
+                    if (translationResult.success && translationResult.translated_text) {
+                      finalText = translationResult.translated_text;
+                      console.log('Translation successful:', finalText);
+                    } else {
+                      console.warn('Translation failed, using original text');
+                    }
+                    
+                    // Set description with translated text
+                    setFormData(prev => ({ ...prev, description: finalText }));
+                    
+                    // Process with LLM
+                    await processWithAI(finalText);
+                  } catch (error) {
+                    console.error('Processing error:', error);
+                    toast({
+                      title: 'Processing failed',
+                      description: error instanceof Error ? error.message : 'Please try again',
+                      variant: 'destructive',
+                    });
+                  } finally {
+                    setIsProcessingAI(false);
+                  }
+                }}
+                disabled={!transcription.trim() || isProcessingAI || loading}
+                className="w-full"
+                variant="secondary"
+              >
+                {isProcessingAI ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Processing with AI...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    Process Transcript with AI
+                  </>
+                )}
+              </Button>
               
               {isProcessingAI && (
                 <div className="flex items-center gap-2 text-sm text-primary">

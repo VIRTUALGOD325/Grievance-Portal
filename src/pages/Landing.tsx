@@ -109,8 +109,8 @@ const Landing = () => {
               <div className="text-white/80">Available Service</div>
             </div>
             <div>
-              <div className="text-4xl font-bold mb-2">5+</div>
-              <div className="text-white/80">Department Coverage</div>
+              <div className="text-4xl font-bold mb-2">3</div>
+              <div className="text-white/80">Department Coverages</div>
             </div>
             <div>
               <div className="text-4xl font-bold mb-2">Fast</div>

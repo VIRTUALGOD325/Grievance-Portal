@@ -184,15 +184,25 @@ def quick_categorize(text):
             location = match.group(1).strip()
             break
     
-    # Generate a concise summary (first sentence or up to 100 chars)
+    # Generate a concise summary (first sentence or up to 80 chars)
     sentences = text.split('.')
-    summary = sentences[0].strip() if sentences else text[:100]
-    if len(text) > 100 and len(summary) < 100:
-        summary = text[:100].strip() + "..."
+    summary = sentences[0].strip() if sentences else text[:80]
+    if len(summary) > 80:
+        summary = summary[:80].strip() + "..."
+    
+    # Generate a more detailed description (full text or up to 200 chars)
+    description = text.strip()
+    if len(description) > 200:
+        description = description[:200].strip() + "..."
+    
+    # If location is found, add it to description for context
+    if location:
+        description = f"{description} Located at {location}."
     
     analysis = f"""Department: {department}
 Severity: {severity}
 Location: {location if location else ''}
+Description: {description}
 Summary: {summary}"""
     
     return analysis
@@ -207,9 +217,11 @@ def categorize():
             return jsonify({'error': 'No text provided'}), 400
         
         grievance_text = data['text']
-        use_fast_mode = data.get('fast_mode', True)  # Default to fast mode
+        instruction = data.get('instruction', '')
+        use_fast_mode = data.get('fast_mode', False)  # Default to LLM mode
+        model_key = data.get('model', DEFAULT_MODEL)
         
-        logger.info(f"Processing grievance (fast_mode={use_fast_mode})")
+        logger.info(f"Processing grievance with model={model_key}, fast_mode={use_fast_mode}")
         
         if use_fast_mode:
             # Use fast keyword-based categorization
@@ -220,47 +232,52 @@ def categorize():
                 'text': analysis,
                 'generated_text': analysis,
                 'success': True,
-                'model_used': 'fast_keyword_matcher'
+                'model_used': 'fast_keyword_matcher',
+                'raw_output': analysis
             })
+        
+        # Use Berg fine-tuned LLM models
+        logger.info(f"Using Berg fine-tuned model: {MODELS[model_key]}")
+        
+        # Load model if not already loaded
+        if model_key not in pipes:
+            logger.info(f"Loading model {model_key}...")
+            if not load_model(model_key):
+                return jsonify({'error': f'Failed to load model {model_key}'}), 500
+        
+        pipe = pipes[model_key]
+        
+        # Use the instruction format from training (if provided)
+        if instruction:
+            prompt = f"{instruction}\n\nComplaint: {grievance_text}"
         else:
-            # Use LLM (slow on CPU)
-            model_key = data.get('model', DEFAULT_MODEL)
-            
-            # Load model if not already loaded
-            if model_key not in pipes:
-                logger.info(f"Loading model {model_key}...")
-                if not load_model(model_key):
-                    return jsonify({'error': f'Failed to load model {model_key}'}), 500
-            
-            pipe = pipes[model_key]
-            
-            # Create prompt for categorization (shorter for faster response)
-            prompt = f"""Analyze this grievance briefly:
-Grievance: {grievance_text}
-
-Provide in 3-4 lines:
-1. Category
-2. Priority (critical/high/medium/low)
-3. Department
-4. Location
-
-Analysis:"""
-            
-            logger.info(f"Processing grievance with {model_key} model")
-            
-            # Generate response with reduced tokens for faster processing
-            result = pipe(prompt, max_new_tokens=150, temperature=0.5)
-            generated_text = result[0]['generated_text']
-            
-            # Extract only the analysis part (after the prompt)
-            analysis = generated_text.split("Analysis:")[-1].strip()
-            
-            return jsonify({
-                'text': analysis,
-                'generated_text': analysis,
-                'success': True,
-                'model_used': model_key
-            })
+            # Fallback to simple format
+            prompt = f"Complaint: {grievance_text}"
+        
+        logger.info(f"Processing with Berg model: {model_key}")
+        logger.info(f"Prompt length: {len(prompt)} chars")
+        
+        # Generate response with Berg model
+        result = pipe(prompt, max_new_tokens=300, temperature=0.7, do_sample=True)
+        generated_text = result[0]['generated_text']
+        
+        # Extract only the model's response (after the prompt)
+        if instruction:
+            # Remove instruction and complaint from output
+            model_output = generated_text.replace(prompt, '').strip()
+        else:
+            model_output = generated_text.split("Complaint:")[-1].strip()
+        
+        logger.info(f"Raw Berg model output: {model_output}")
+        
+        return jsonify({
+            'text': model_output,
+            'generated_text': model_output,
+            'success': True,
+            'model_used': f'Berg77/{model_key}',
+            'raw_output': model_output,
+            'full_output': generated_text
+        })
         
     except Exception as e:
         logger.error(f"Categorization error: {str(e)}")
